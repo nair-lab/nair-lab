@@ -1,0 +1,2452 @@
+---
+title: "Exploring Mutual Information"
+author: "Sean Sullivan"
+date: "3/22/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+```{r}
+
+install.packages("igraph", verbose=TRUE)
+install.packages("R.matlab")
+# install.packages('gplk')
+install.packages("remotes")
+remotes::install_github("AlexChristensen/SemNeT")
+install.packages("tidyverse")
+install.packages("readxl")
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("minet")
+BiocManager::install("Rgraphviz")
+BiocManager::install("RCy3")
+BiocManager::install("org.Sc.sgd.db")
+BiocManager::install("clusterProfiler") # select() function appears to overlap between org.sc and clusterprofiler packages, can't have both in use at once maybe? detach("package:clusterProfiler", unload = TRUE)
+# clusterprofiler may be a better package though...especially for bitr function (bio id translator)
+
+```
+
+
+
+
+
+```{r}
+
+# chunk for testing package installs
+BiocManager::install("org.Sc.sgd.db")
+
+BiocManager::install("clusterProfiler")
+
+
+```
+
+```{r}
+options(scipen = 140)
+library(igraph)
+library(R.matlab)
+library(remotes)
+library(SemNeT)
+library(tidyverse)
+library(readxl)
+library(minet)
+library(Rgraphviz)
+library(org.Sc.sgd.db)
+library(clusterProfiler)
+library(enrichplot)
+library(GOSemSim)
+library(AnnotationDbi)
+library(dplyr)
+
+```
+
+
+With this set of chunks, I'm going to import lists of genes controlled by GAL4 from both YEASTRACT and the subset that VEG identified as being differentially expressed in the REG strain. 
+
+I will also create a data structure containing the TFs (as identified by YEASTRACT) that VEG identified as being differentially expressed in the REG strain.
+
+
+This chunk creates objects containing the differentially expressed genes and TFs between CONS and REG strains on xylose and galactose as captured in VEG Figure 6 e,f.
+
+```{r}
+
+veggal4reg <- c('AAT2','ACS2','ADH1','AFR1','AIM2','AMD1','ATP16','ATP2','ATR1','BAR1','BUB2','CAF120','CHS7','CIR1','CIS3','CIT3','CLN3','CMC1','CNL1','CPA1','CTS1','CWC25','CWP1','CYC3','DAP1','DED1','DFG16','DMA1','DMA2','DPL1','DPS1','DSE2','DUG1','ECM33','EGT2','EMP46','ERG4','ERV46','EXG2','FAA1','FRQ1','FUM1','FUN26','GAS1','GAS3','GCY1','GGC1','GIC2','GIP2','GSH1','HEK2','HEM2','HFD1','HHF2','HMS2','HNT3','HOG1','HOM2','HOM6','HSP10','HTA2','HTB1','HXT1','HXT2','IMG2','IPT1','ISY1','LAC1','LTP1','LYP1','LYS1','MBR1','MCH5','MDH1','MEF1','MET17','MF(ALPHA)1','MIP1','MIR1','MRP17','MRP21','MRP4','MRPL24','MRPL31','MRPL32','MRPL37','MRPL38','MRPL4','MRPS16','MRPS17','MRPS18','MSK1','MSS51','MTM1','MUM2','MYO1','MZM1','NPL3','NTE1','NTH2','NTR2','OPT2','OSW5','OXA1','PAA1','PCL10','PCS60','PET9','PHO80','PHS1','PIR3','PLB2','PLB3','PMA2','PMT2','POR1','POS5','PST1','PTA1','PTR2','QDR1','RBD2','RDR1','RET2','RIB4','RIO1','RNR4','RPL3','RPS22','BRSM27','RTT102','RUP1','SAM1','SAM2','SCT1','SCW10','SCW11','SCW4','SEO1','SFB2','SFL1','SHY1','SLS1','SNQ2','SRL1','SSC1','SSU1','SUN4','SUR7','SWS2','TDA7','TIM13','TIP1','TOA1','TOM40','TRX1','TUB2','USA1','USO1','UTH1','VMA5','VPH1','WHI3','WSC2','WTM1','YBL029W','YBR197C','YCR023C','YDR010C','YER152C','YHB1','YKL031W','YLR030W','YME1','YMR147W','YOR283W','YOX1','YPL067C','YPL071C','YPR053C','ZEO1')
+ # source https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-018-03645-7/MediaObjects/41467_2018_3645_MOESM4_ESM.pdf
+
+vegregtfs <- c('Aft1','Aro80','Cbf1','Cup9','Eds1','Gcn4','Gsm1','Haa1','Hcm1','Ino4','Mig3','Pdr3','Rdr1','Rds2','Rph1','Rsf2','Sfl1','Stb5','Stp2','Sum1','Sut2','Swi5','Tye7','Vhr1','War1','YKL222C','YNR063W','Yap3','Yox1')
+ # Source https://static-content.springer.com/esm/art%3A10.1038%2Fs41467-018-03645-7/MediaObjects/41467_2018_3645_MOESM5_ESM.pdf
+
+
+# I make the character vector containing all genes controlled by gal4 in the next chunk, resulting data structure is 'gal4control'
+
+
+```
+
+
+Code that brings in and formats all the genes controlled by GAL4 as listed by the YEASTRACT database.
+
+```{r}
+library(readxl)
+
+gal4yeastract <- read_excel("Z:/SeanS/RNAseq/Mutual Information/GAL4controlledgenesYEASTRACT.xlsx", sheet = 'Sheet1', range = 'M1:M1117', col_names = FALSE, trim_ws = TRUE)
+
+
+gal4control <- c()
+
+for (i in 1:1117) {
+  
+  charconv <- as.character(gal4yeastract[i,1])
+  
+  gal4control[length(gal4control) + 1] <- charconv
+  
+}
+
+```
+
+
+
+This code chunk brings in all the 124 yeast TFs I could extract from YEASTRACT from the TF-consensus sequence page. I will need to remove duplicates and remove the trailing 'p' so that the names match the gene names being used in the rest of this code.
+
+```{r}
+# This code brings in the list of 124 TFs that I took from the YEASTRACT website. Later on I got a more complete list of 220 TFs, so I will write new code to create a full set based on that resource.
+
+library(readxl)
+
+yeastractTFsexcel124 <- read_excel("Z:/SeanS/RNAseq/Mutual Information/YEASTRACTallTFs.xlsx", sheet = 'Sheet1', range = 'H1:H401', col_names = FALSE, trim_ws = TRUE)
+
+
+yeastractTFs124 <- c()
+
+for (i in 1:401) {
+  
+  charconv <- as.character(yeastractTFsexcel124[i,1])
+  
+  yeastractTFs124[length(yeastractTFs124) + 1] <- charconv
+  
+}
+
+# now I need to remove the duplicates and the trailing 'p' from this character array
+
+yeastractTFs124 <- unique(yeastractTFs124)
+
+# this struct is now 124 long --> need to remove 'p'
+
+for (i in 1:124) {
+  
+  newstr <- substr(yeastractTFs124[i],1,nchar(yeastractTFs124[i])-1)
+  
+  yeastractTFs124[i] <- newstr
+  
+}
+
+```
+
+
+
+This code chunk brings in all the yeast TFs contained in the flat file that Pedro Monteiro from YEASTRACT sent me. I will need to remove duplicates and remove the trailing 'p' so that the names match the gene names being used in the rest of this code.
+
+```{r}
+
+# Bringing in this list of 220 will be easier as there is less trimming/text alteration I need to do to make it fit with my later code.
+
+library(readxl)
+
+yeastractTFsexcel <- read_excel("Z:/SeanS/RNAseq/Mutual Information/all_yeastract2019_TFs_flat_file.xlsx", sheet = 'yeastract2019-flat-file', range = 'P1:P220', col_names = FALSE, trim_ws = TRUE)
+
+
+yeastractTFs <- c()
+
+for (i in 1:220) {
+
+  charconv <- as.character(yeastractTFsexcel[i,1])
+
+  yeastractTFs[length(yeastractTFs) + 1] <- charconv
+
+}
+
+# now I need to remove the duplicates and the trailing 'p' from this character array
+
+yeastractTFs <- unique(yeastractTFs)
+
+```
+
+This code modifies yeastractTFs so that it contains a list of TFs that is the union of the list of 124 pulled from the TF-consensus page and those extracted from all_yeastract2019_TFs_flat_file.xlsx that I got from Pedro Monteiro.
+
+I'm going to have this unified list be called yeastractTFs so that it matches the rest of the code from here on out.
+
+```{r}
+
+yeastractTFs <- c(yeastractTFs,yeastractTFs124)
+
+yeastractTFs <- unique(yeastractTFs)
+
+
+```
+
+
+Next step is to bring in the list of DEG that Vikas sent me (DEGs Xyl-Ara vs Gal.xlsx). I am interested in extracting the gene name (col B), differential expression log2 ratio (col C), and the differential expression p-value (col K).
+
+```{r}
+
+library(readxl)
+
+vdtregDEG <- read_excel("Z:/SeanS/RNAseq/Mutual Information/DEGs Xyl-Ara vs Gal.xlsx", sheet = 'DEGs Xyl-Ara vs Gal', range = 'A1:K5893', col_names = TRUE, trim_ws = TRUE)
+
+
+# keep just the rows I am interested in
+vdtregDEG <- vdtregDEG[,c(2,3,11)]
+
+# now need to modify the first column to remove ' CDS'
+
+for (i in 1:5892) {
+  
+  charconv2 <- substr(vdtregDEG$Name[i],1,nchar(vdtregDEG$Name[i])-4)
+  
+  vdtregDEG$Name[i] <- charconv2
+  
+}
+
+```
+
+
+Now I need to compare the list of TFs from YEASTRACT to the vdtregDEG structure, pull out the differential expression log2 and p-value of each TF that appears in both lists, and associate them together in a new data structure. The result is a data frame containing the TF name, it's Log2DE, and pvalue.
+
+```{r}
+
+# First I will make a data frame where all this new info will be stored
+
+tfDEGdata <- data.frame(matrix(nrow = 0, ncol = 3))
+
+# Now it's time to search through tfDEGdata to see if the TF appears there and, if so, grab its log2DE + pvalue
+
+for (i in 1:length(yeastractTFs)) {
+
+  if(length(grep(yeastractTFs[i], vdtregDEG$Name, value = FALSE, fixed = TRUE)) > 0) { 
+    
+    tfind <- grep(yeastractTFs[i], vdtregDEG$Name, value = FALSE, fixed = TRUE)
+    
+    if (length(tfind)>1) {
+      
+      bestind <- 0
+      
+      for (j in 1:length(tfind)) {
+        
+        if (yeastractTFs[i] == vdtregDEG$Name[tfind[j]]) {
+          
+          bestind  <- tfind[j]
+          
+        }
+      }
+      
+      tfind <- bestind
+      
+    }
+    #print(length(tfind))
+    
+    tfDEGdata <- rbind(tfDEGdata, c(yeastractTFs[i], vdtregDEG$`Differential Expression Log2 Ratio`[tfind], vdtregDEG$`Differential Expression p-value`[tfind]))
+
+  }
+}
+
+colnames(tfDEGdata) <- c('tf_name','log2DE','p_value') # these names are temporary but get used in the next code chunk
+
+```
+
+
+Just for Vikas, I will write tfDEGdata (which now contains 205 TFs and their DEG/pvalues) to an excel file that I can give to him to use for further analysis.
+
+```{r}
+
+write.table(tfDEGdata, file = 'Z:/SeanS/RNAseq/Mutual Information/221tfs_log2de_pvalue4vdt.csv', append = FALSE, sep = ",", dec = ".",
+            row.names = FALSE, col.names = TRUE)
+
+```
+
+
+
+
+I believe this set of code chunks was not used in the final analysis (001 start)
+
+Now I need to go through whatever CLR matrix (or whatever network we want to map these TFs onto) and pull out the network information of these DETFs.
+
+I will do this by adding columns to the tfDEGdata dataframe that I have already constructed such that the final data frame should have TF name, differential expression log2, p-value, and network information (gene pairs + inferred weights of network edges) for each TF found in the vdtregDEG structure.
+
+```{r}
+
+network <- clr2 # here is where you set the network you want to work on
+
+rnames <- row.names(network)
+
+# need to find the indices in the clr network rows where the TFs in the list of YEASTRACT of TFs, then use that index to collect the correct row of the network
+
+for (i in 1:length(tfDEGdata$tf_name)) {
+
+  if(length(grep(tfDEGdata$tf_name[i], rnames, value = FALSE, ignore.case = TRUE)) > 0) {
+
+    tfind <- grep(tfDEGdata$tf_name[i], rnames, value = FALSE, ignore.case = TRUE)
+    
+    
+    if (length(tfind)>1) {
+  
+      bestind <- 0
+      
+      for (j in 1:length(tfind)) {
+        
+        subname <- rnames[tfind[j]]
+        
+        subname <- substr(subname, 1, nchar(subname)-4)
+        
+        if (tfDEGdata$tf_name[i] == subname) {
+          
+          bestind  <- tfind[j]
+          
+        }
+      }
+      
+      tfind <- bestind
+  
+    }
+    
+
+    newrow <- c(tfDEGdata$tf_name[i], tfDEGdata$log2DE[i], tfDEGdata$p_value[i], clr2[i,])
+
+    tfDEGdata[i,1:5886] <- newrow
+
+  }
+}
+
+# need to create a character vector that will be used as the column names for the data frame that I will build
+colnames(tfDEGdata) <- c('tf_name','log2DE','p_value', colnames(clr2))
+
+# Now I want to sort this data frame (tfDEGdata) by increasing p-value so that the most significantly differentially expressed TFs are at the top.
+
+tfDEGdata <- tfDEGdata[order(tfDEGdata$p_value, decreasing = FALSE),]
+
+```
+
+Now I have a data frame with all of the TFs that were extracted from YEASTRACT, combined with the differential expression and p-value data from VDTreg and the inferred network weights from a CLR matrix, all sorted by p-value significance.
+
+Now I need code that takes a given TF and spits out a list of genes that it is connected to based on the inferred network. This list will be sorted by decreasing edge strength in the network. These lists can be fed into tools like g:Profiler and YEASTRACT to find GO terms enriched
+
+```{r}
+
+tfname <- "RPN4"
+
+tfind <- match(tfname, tfDEGdata$tf_name)
+
+tfdf4exp <- data.frame()
+
+for (i in 4:5886) {
+
+  if (!is.nan(as.numeric(tfDEGdata[tfind,i]))) {
+    
+    if (as.numeric(tfDEGdata[tfind,i]) > 0) {
+      
+      tfdf4exp <- rbind(tfdf4exp, c(rnames[i-3],as.numeric(tfDEGdata[tfind,i])))
+      
+    }
+  }
+}
+
+colnames(tfdf4exp) <- c('gene_name', 'edgeWeight')
+tfdf4exp <- tfdf4exp[order(tfdf4exp$edgeWeight, decreasing = TRUE, na.last = TRUE),]
+
+for (k in 1:length(tfdf4exp$gene_name)) {
+  
+  dropcds <- substr(tfdf4exp$gene_name[k],1,nchar(tfdf4exp$gene_name[k])-4)
+  
+  tfdf4exp$gene_name[k] <- dropcds
+  
+}
+
+# Now quick code to grab the ordered list of genes with non-zero network values so that it can be put into a website online.
+
+genes4exp <- c(tfdf4exp$gene_name)
+
+writeClipboard(genes4exp)
+
+```
+
+(001 End)
+
+
+
+
+
+We ended up not using this approach (002 Start)
+
+This set of chunks may be moved around, but here I am going to write code that brings in networks identified in the literature and creates a data structure that associates each TF with the list of genes that the particular network has decided are connected to that TF. 
+
+I can then put these lists into tools like g:Profiler or YEASTRACT to pull out the GO terms associated with the genes linked to each TF. I will then do this for the most DETFs that were identified in Vikas's transcriptomic data.
+
+
+The first step is to translate the full 221 TF YeastractTFs list from their common names to their systematic ORF names as this is the form that the networks that I am bringing use to represent genes.
+
+```{r}
+# library(org.Sc.sgd.db) # remember that if Clusterprofiler is also loaded the select() function will be from that package unless explicitly called otherwise
+
+TF_name_translator <- select(org.Sc.sgd.db, keys = yeastractTFs, keytype = "GENENAME", columns = c("ORF", "GENENAME"))
+
+# There are gaps in this data structure (NA) because some of the TFs don't have a common name in the yeastractTFs object and only have an ORF name. I need to fill in these gaps
+
+for (i in 1:length(TF_name_translator$GENENAME)) {
+  
+  if (is.na(TF_name_translator$ORF[i])) {  # (TF_name_translator$ORF == "NA")
+    
+    TF_name_translator$ORF[i] <- TF_name_translator$GENENAME[i]
+
+  }
+}
+
+# Now what I notice is that some gene names don't have ORF names or SGD ids in the resulting data structure even though they can appear in SGD (only ROF1 and PUL4). Since it is only 2, will fix manually I think based on SGD website
+
+TF_name_translator$ORF[199] <- "YNR063W" # PUL4
+TF_name_translator$SGD[199] <- "S000005346"
+
+TF_name_translator$ORF[208] <- "YHR177W" # ROF1
+TF_name_translator$SGD[208] <- "S000001220"
+
+# FYI MAL63 seems to only be known as MAL63
+
+sgdid_db <- select(org.Sc.sgd.db, keys = TF_name_translator$ORF, keytype = "ORF", columns = c("GENENAME", "ORF", "SGD"))
+
+# To fill in missing gaps in the SGD column, I will grab the whole SGD column from sgdid_db and use it to replace the SGD column in TF_name_translator
+
+TF_name_translator$SGD <- sgdid_db$SGD
+
+
+```
+
+
+Now I have a data structure with all the TFs from the two YEASTRACT sources (consensus and flat file), I'm going to first associate the log2DE and pvalue with each of these TFs from the tfDEGdata structure.
+
+I will do this by adding these values to a new struct that starts as TF_name_translator structure that then gets the data added. 
+
+
+```{r}
+
+TF_trnsltr_DEG <- TF_name_translator
+
+templist <- matrix(, nrow = length(TF_trnsltr_DEG$GENENAME), ncol = 2)
+
+for (i in 1:length(TF_trnsltr_DEG$GENENAME)) {
+  
+  if (length(grep(TF_trnsltr_DEG$GENENAME[i], tfDEGdata$tf_name, value = FALSE, fixed = TRUE)) > 0) {
+  
+    tfind <- grep(TF_trnsltr_DEG$GENENAME[i], tfDEGdata$tf_name, value = FALSE, fixed = TRUE)
+    
+    if (length(tfind) > 1) {
+      
+      for (j in 1:length(tfind)) {
+        
+        if (TF_trnsltr_DEG$GENENAME[i] == tfDEGdata$tf_name[tfind[j]]) {
+          
+          tfind <- tfind[j]
+          
+        }
+        
+      }
+      
+      
+    }
+    
+    #print(tfind)
+    
+    templist[i,1] <- as.numeric(tfDEGdata$log2DE[tfind])
+    templist[i,2] <- as.numeric(tfDEGdata$p_value[tfind])
+    
+  } else {
+    
+    templist[i,1] <- NA
+    templist[i,2] <- NA
+    
+  }
+}
+
+TF_trnsltr_DEG[,4] <- templist[,1]
+TF_trnsltr_DEG[,5] <- templist[,2]
+
+base::colnames(TF_trnsltr_DEG) <- c("GENENAME", "ORF", "SGD", "log2DE", "pvalue")
+
+```
+
+I believe this is now correct. There are, however, some (15) TFs that have no log2DE/pvalue in the tfDEGdata structure. Oh well.
+
+
+Now I will collect all the genes connected to these TFs that I can find via different networks identified in the literature and associate them with the TF in a data frame that I can then combine with the TF_trnsltr_DEG struct I have created above.
+
+```{r}
+
+# First step is to bring in each network
+
+egrinstart <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/pcbi.1005489.s011.xlsx", sheet = 'EGRIN_TRN', range = 'A1:B2589', col_names = TRUE, trim_ws = TRUE)
+
+yeastractstart <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/pcbi.1005489.s011.xlsx", sheet = 'YEASTRACT_TRN', range = 'A1:B31076', col_names = TRUE, trim_ws = TRUE)
+
+clrstart <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/pcbi.1005489.s008.xls", sheet = 'CLR_RegulatoryNetwork', range = 'A1:B65536', col_names = TRUE, trim_ws = TRUE)
+
+
+# I will start with the EGRIN network, then basically just repeat the same code for each of the other networks, creating structures along the way that I will have to knit together later because they will have different lengths
+
+tflist <- c(unique(egrinstart$TF))
+
+targetlist <- vector("list", length = length(tflist))
+
+for (i in 1:length(tflist)) {
+
+  templist <- list()
+
+  for (j in 1:length(egrinstart$targets)) {
+
+    if (tflist[i] == egrinstart$TF[j]) {
+
+      templist[length(templist) + 1] <- egrinstart$targets[j]
+
+    }
+  }
+
+  targetlist[[i]] <- templist
+
+}
+
+egrinout <- data.frame(tf = tflist, targets = I(targetlist))
+
+# may need this later - lit_tf_targets <- data.frame(tf = tflist, EGRIN_targets = I(targetlist), row.names = NULL, stringsAsFactors = FALSE)
+
+# Now YEASTRACT network
+
+tflist <- c(unique(yeastractstart$TF))
+
+targetlist <- vector("list", length = length(tflist))
+
+for (i in 1:length(tflist)) {
+
+  templist <- list()
+
+  for (j in 1:length(yeastractstart$targets)) {
+
+    if (tflist[i] == yeastractstart$TF[j]) {
+
+      templist[length(templist) + 1] <- yeastractstart$targets[j]
+
+    }
+  }
+
+  targetlist[[i]] <- templist
+
+}
+
+yeastractout <- data.frame(tf = tflist, targets = I(targetlist))
+
+
+# Finally CLR network
+
+tflist <- c(unique(clrstart$TF))
+
+targetlist <- vector("list", length = length(tflist))
+
+colnames(clrstart) <- c("TF", "targets")
+
+for (i in 1:length(tflist)) {
+
+  templist <- list()
+  
+  #print(i)
+
+  for (j in 1:length(clrstart$targets)) {
+    
+    #if (!is.na(clrstart$TF[j])) {
+      
+      if (tflist[i] == clrstart$TF[j]) {
+
+      templist[length(templist) + 1] <- clrstart$targets[j]
+
+      }
+    #}
+  }
+
+  targetlist[[i]] <- templist
+
+}
+
+clrout <- data.frame(tf = tflist, targets = I(targetlist))
+
+
+```
+
+
+Now that I have separate structures with TF:gene associations for all three networks, I will create a new structure that associates these gene lists with the TF found in the combined YEASTRACT TF list + DEG/pvalues (TF_trnsltr_DEG).
+
+```{r}
+
+
+TF_trnsltr_DEG_net <- data.frame(GENENAME = TF_trnsltr_DEG$GENENAME, ORF = TF_trnsltr_DEG$ORF, SGD = TF_trnsltr_DEG$SGD, log2DE = TF_trnsltr_DEG$log2DE, pvalue = TF_trnsltr_DEG$pvalue, EGRIN_targets = character(length = length(TF_trnsltr_DEG$GENENAME)), YEASTRACT_targets = character(length = length(TF_trnsltr_DEG$GENENAME)), CLR_targets = character(length = length(TF_trnsltr_DEG$GENENAME)), stringsAsFactors = FALSE)
+
+# df1 <-as.data.frame(matrix(nrow=length(TF_trnsltr_DEG$GENENAME),ncol=8)) another way to do this is to start with a dataframe that is all NA then modify each column afterwards
+
+# Start with EGRIN network
+
+for (i in 1:length(TF_trnsltr_DEG_net$ORF)) {
+  
+  tf <- TF_trnsltr_DEG_net$ORF[i]
+  
+  for (j in 1:length(egrinout$tf)) {
+    
+    if (tf == egrinout$tf[j]) {
+      
+      TF_trnsltr_DEG_net$EGRIN_targets[i] <- egrinout$targets[j]
+      
+    }
+    
+  }
+  
+  if (TF_trnsltr_DEG_net$EGRIN_targets[i] == '') {
+
+    TF_trnsltr_DEG_net$EGRIN_targets[i] <- NA
+
+  }
+}
+
+# Next comes YEASTRACT
+
+for (i in 1:length(TF_trnsltr_DEG_net$ORF)) {
+  
+  tf <- TF_trnsltr_DEG_net$ORF[i]
+  
+  for (j in 1:length(yeastractout$tf)) {
+    
+    if (tf == yeastractout$tf[j]) {
+      
+      TF_trnsltr_DEG_net$YEASTRACT_targets[i] <- yeastractout$targets[j]
+      
+    }
+    
+  }
+  
+  if (TF_trnsltr_DEG_net$YEASTRACT_targets[i] == '') {
+
+    TF_trnsltr_DEG_net$YEASTRACT_targets[i] <- NA
+
+  }
+}
+
+# Finally CLR
+
+
+for (i in 1:length(TF_trnsltr_DEG_net$ORF)) {
+  
+  tf <- TF_trnsltr_DEG_net$ORF[i]
+  
+  for (j in 1:length(clrout$tf)) {
+    
+    if (tf == clrout$tf[j]) {
+      
+      TF_trnsltr_DEG_net$CLR_targets[i] <- clrout$targets[j]
+      
+    }
+    
+  }
+  
+  if (TF_trnsltr_DEG_net$CLR_targets[i] == '') {
+
+    TF_trnsltr_DEG_net$CLR_targets[i] <- NA
+
+  }
+}
+
+```
+
+With this structure in place, I now have to figure out how to use the output structure of this previous chunk to export the gene list associated with each TF such that I can perform GO enrichment analysis for DETFs.
+
+I will make something that collects the genes associated with a given TF(s), but first I need to quickly characterize which network has captured the most TFs that appear in Vikas's DETF list.
+
+```{r}
+
+tfs <- c('XBP1','USV1','NRG1','SIP4','ACA1','DAL80','AZF1','RGM1','CAT8','MIG3','MIG2','FLO8')
+
+tfcount <- length(tfs)
+
+cols <- c("tf","egrin","yeastract","clr")
+
+tfnetcomp <- matrix(,nrow = tfcount, ncol = 4, dimnames = list(NULL,cols))
+
+for (i in 1:tfcount) {
+  
+  tfnetcomp[i,1] <- tfs[i]
+  
+  for (j in 1:length(TF_trnsltr_DEG_net$GENENAME)) {
+    
+    if (tfs[i] == TF_trnsltr_DEG_net$GENENAME[j]) {
+      
+      #print(TRUE)
+      
+      if(class(TF_trnsltr_DEG_net$EGRIN_targets[i][[1]]) == 'logical') {  # is.logical(class(TF_trnsltr_DEG_net$EGRIN_targets[i][[1]]))
+    
+        tfnetcomp[i,2] <- FALSE
+        
+      } else {
+    
+        tfnetcomp[i,2] <- TRUE
+        
+      }
+      
+      if(class(TF_trnsltr_DEG_net$YEASTRACT_targets[i][[1]]) == 'logical') {  # is.logical(class(TF_trnsltr_DEG_net$EGRIN_targets[i][[1]]))
+    
+        tfnetcomp[i,3] <- FALSE
+        
+      } else {
+    
+        tfnetcomp[i,3] <- TRUE
+        
+      }
+      
+      if(class(TF_trnsltr_DEG_net$CLR_targets[i][[1]]) == 'logical') {  # is.logical(class(TF_trnsltr_DEG_net$EGRIN_targets[i][[1]]))
+    
+        tfnetcomp[i,4] <- FALSE
+        
+      } else {
+    
+        tfnetcomp[i,4] <- TRUE
+        
+      }
+    }
+  }
+}
+
+```
+
+It looks like all three networks capture most of the highly DETFs that Vikas is pursuing, but some are excluded in some networks. This corresponds to the accuracy of the networks - the most accurate network (EGRIN) captures the fewest TFs (8/12), YEASTRACT next (11/12) and finally CLR (12/12). Then again, size of the lists associated with each TF in each network are not the same - EGRIN shows fewer connections on average because these are higher quality connections.
+
+This code is for exporting genes associated with a given TF in a given network for analysis using g:Profiler/YEASTRACT/etc.
+
+```{r}
+# TF indexes in TF_trnsltr_DEG_net - (GAL4 - 42), (XBP1 - 186), (USV1 - 182 no egrin), (NRG1 - 107 no egrin), (SIP4 - 145), (ACA1 - 2), (DAL80 - 26), (AZF1 - 13), (RGM1 - 130), (CAT8 - 16), (MIG3 - 92), (MIG2 - 91), (FLO8 - 38)
+
+
+genes4exp <- c(as.character(TF_trnsltr_DEG_net$EGRIN_targets[186][[1]])) # EGRIN
+#genes4exp <- c(as.character(TF_trnsltr_DEG_net$YEASTRACT_targets[107][[1]])) #YEASTRACT
+#genes4exp <- c(as.character(TF_trnsltr_DEG_net$CLR_targets[186][[1]])) # CLR
+
+print(length(genes4exp))
+
+writeClipboard(genes4exp)
+
+```
+
+I need a list of all the genes identified in Vikas' data set to use as a reference for GO term enrichment. Luckily, this information already exists in the structure vdtregDEG. However, I need to add a new column to this structure that converts all the common names of the genes to their systematic ORF names.
+
+```{r}
+
+vdtregDEGorfs <- select(org.Sc.sgd.db, keys = vdtregDEG$Name, keytype = "GENENAME", columns = "ORF")
+
+for (i in 1:length(vdtregDEGorfs$ORF)) {
+  
+  if (is.na(vdtregDEGorfs$ORF[i])) {
+    
+    vdtregDEGorfs$ORF[i] <- toupper(vdtregDEGorfs$GENENAME[i])
+    
+  }
+}
+
+vdtregDEG$ORF <- vdtregDEGorfs$ORF
+
+```
+
+Now quick code to export this reference gene list:
+
+```{r}
+
+genes4exp <- c(as.character(vdtregDEG$ORF))
+
+print(length(genes4exp))
+
+writeClipboard(genes4exp)
+
+```
+
+Note: vdtregDEG contains differential expression analysis values (logfold + pvalues) for the both the initial comparison (GAL-REG vs XYL-/ARA-REG) that we ended up using as well as for the later comparison we tried but didn't use (GAL-CONS-GAL4 vs XYL-/ARA-REG).
+
+(002 End)
+
+
+
+(003 Start)
+
+This set of chunks investigates the identities of genes connected to GAL4 in the three literature networks I've brought into Rstudio. 
+
+I want to check if any of the DETFs that Vikas is focused on appears connected to GAL4 in any network. Importantly - if not, it shows that the metabolism of S. cerevisiae is able to respond to different substrates despite having the GAL regulon (for galactose utilization) activated.
+
+
+```{r}
+
+# TF indexes in TF_trnsltr_DEG_net - (GAL4 - 42), (XBP1 - 186), (USV1 - 182 no egrin), (NRG1 - 107 no egrin), (SIP4 - 145), (ACA1 - 2), (DAL80 - 26), (AZF1 - 13), (RGM1 - 130), (CAT8 - 16), (MIG3 - 92), (MIG2 - 91), (FLO8 - 38)
+
+DETFs <- c(TF_trnsltr_DEG_net$ORF[186],TF_trnsltr_DEG_net$ORF[182],TF_trnsltr_DEG_net$ORF[107],TF_trnsltr_DEG_net$ORF[145],TF_trnsltr_DEG_net$ORF[2],TF_trnsltr_DEG_net$ORF[26],TF_trnsltr_DEG_net$ORF[13],TF_trnsltr_DEG_net$ORF[130],TF_trnsltr_DEG_net$ORF[16],TF_trnsltr_DEG_net$ORF[92], TF_trnsltr_DEG_net$ORF[91], TF_trnsltr_DEG_net$ORF[38])
+
+in_network <- matrix(, nrow = length(DETFs), ncol = 4)
+colnames(in_network) <- c("tf", "egrin", "yeastract","clr")
+
+for (i in 1:length(DETFs)) {
+  
+  in_network[i,1] <- DETFs[i]
+
+  if (length(grep(DETFs[i], TF_trnsltr_DEG_net$EGRIN_targets[42][[1]], ignore.case = TRUE)) > 0) {
+
+    in_network[i,2] <- TRUE
+
+  } else  {
+    
+    in_network[i,2] <- FALSE
+    
+  }
+  
+    if (length(grep(DETFs[i], TF_trnsltr_DEG_net$YEASTRACT_targets[42][[1]], ignore.case = TRUE)) > 0) {
+
+    in_network[i,3] <- TRUE
+
+  } else  {
+    
+    in_network[i,3] <- FALSE
+    
+  }
+  
+    if (length(grep(DETFs[i], TF_trnsltr_DEG_net$CLR_targets[42][[1]], ignore.case = TRUE)) > 0) {
+
+    in_network[i,4] <- TRUE
+
+  } else  {
+    
+    in_network[i,4] <- FALSE
+    
+  }
+}
+
+
+```
+
+(003 End)
+
+
+
+(004 Start)
+
+I do not believe this code chunk ends up being significant to our analysis but the detf_targets_data structure that is created appears to be the source for the Logfold expression changes/pvalues for each gene that are mapped onto nodes in the attributes files used to generate networks in Cytoscape.
+
+The following code is designed to create a structure that grabs the DETFs that Vikas is looking at from TF_trnsltr_DEG_net, grabs the associated genes for each TF in the most accurate literature network possible (EGRIN>YEASTRACT>CLR), and grabs the log2DE + pvalue associated with these genes from vdtregDEG. This will allow me to easily look at how the expression levels of genes associated with these TFs changes between pentoses and hexoses.
+
+```{r}
+
+# I will start a struct and then add rows over time as I collect the various information for each DETF.
+
+# TF indexes in TF_trnsltr_DEG_net - (GAL4 - 42), (XBP1 - 186), (USV1 - 182 no egrin), (NRG1 - 107 no egrin), (SIP4 - 145), (ACA1 - 2), (DAL80 - 26), (AZF1 - 13), (RGM1 - 130), (CAT8 - 16), (MIG3 - 92), (MIG2 - 91), (FLO8 - 38)
+
+DETF_inds <- c(186,182,107,145,2,26,13,130,16,92,91,38)
+
+cnames <- c("tf", "tf_orf", "tf_de", "target", "target_orf", "target_de", "target_pvalue")
+
+detf_targets_data <- matrix(,nrow = 0, ncol = 7)
+
+colnames(detf_targets_data) <- cnames
+
+for (i in 1:length(DETFs)) {
+  
+  print(i)
+  
+  tforf <- DETFs[i]
+  
+  tf <- TF_trnsltr_DEG_net$GENENAME[DETF_inds[i]]
+  
+  tfde <- TF_trnsltr_DEG_net$log2DE[DETF_inds[i]]
+  
+  if (length(TF_trnsltr_DEG_net$EGRIN_targets[DETF_inds[i]][[1]]) > 1) {
+    
+    for (j in 1:length(TF_trnsltr_DEG_net$EGRIN_targets[DETF_inds[i]][[1]])) {
+      
+      target_orf <- toupper(TF_trnsltr_DEG_net$EGRIN_targets[DETF_inds[i]][[1]][j])
+      
+      target <- select(org.Sc.sgd.db, keys = target_orf, keytype = "ORF", columns = "GENENAME")
+      target <- target$GENENAME[1]
+      
+      targetind <- grep(target_orf,vdtregDEGorfs$ORF, ignore.case = TRUE)
+      
+      target_de <- vdtregDEG$`Differential Expression Log2 Ratio`[targetind[1]]
+      
+      target_pvalue <- vdtregDEG$`Differential Expression p-value`[targetind[1]]
+      
+      newrow <- c(tf, tforf, tfde, target, target_orf, target_de, target_pvalue)
+      
+      detf_targets_data <- rbind(detf_targets_data, newrow)
+      
+    }
+  } else {
+    
+    for (j in 1:length(TF_trnsltr_DEG_net$YEASTRACT_targets[DETF_inds[i]][[1]])) {
+      
+      target_orf <- toupper(TF_trnsltr_DEG_net$YEASTRACT_targets[DETF_inds[i]][[1]][j])
+      
+      target <- select(org.Sc.sgd.db, keys = target_orf, keytype = "ORF", columns = "GENENAME")
+      target <- target$GENENAME[1]
+      
+      targetind <- grep(target_orf,vdtregDEGorfs$ORF, ignore.case = TRUE)
+      
+      target_de <- vdtregDEG$`Differential Expression Log2 Ratio`[targetind[1]]
+      
+      target_pvalue <- vdtregDEG$`Differential Expression p-value`[targetind[1]]
+      
+      newrow <- c(tf, tforf, tfde, target, target_orf, target_de, target_pvalue)
+      
+      detf_targets_data <- rbind(detf_targets_data, newrow)
+      
+    }
+  }
+}
+
+detf_targets_data[,7] <- as.numeric(detf_targets_data[,7])
+
+# code finishes with an error but the resulting structure seems to be correct...I am going to move forward with it.
+
+
+```
+
+(004 End)
+
+
+
+
+
+
+
+
+
+
+(005 Start) - Important code that is the source of the attributes files used for network visualization.
+
+Now I am going to modify the YEASTRACT network taken from (2017) Combining inferred regulatory and modify by creating a separate .xls file that contains just the target nodes in the YEASTRACT excel file and their corresponding pvalues from detf_targets_data.
+
+I can then import this file as an attributes file in cytoscape and use it to map colors onto the cytoscape network based on how low the pvalue is. I will also try trimming the network based on pvalues.
+
+```{r}
+
+# first step is to bring in the yeastract network
+
+yeastract_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory YEASTRACT network.xlsx", sheet = 'YEASTRACT_TRN', range = 'A1:B31076', col_names = TRUE, trim_ws = TRUE)
+
+yeastract_targets <- unique(c(yeastract_net$targets, yeastract_net$TF))
+
+yeastract_atts <- matrix(,nrow = 0, ncol = 2)
+
+for (i in 1:length(yeastract_targets)) {
+  
+  curr_targ <- yeastract_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$`Differential Expression p-value`[targ_ind[1]])
+    
+    yeastract_atts = rbind(yeastract_atts,new_row)
+    
+  }
+}
+
+colnames(yeastract_atts) <- c("YEASTRACT_target", "pvalue")
+
+
+```
+
+Now export yeastract_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(yeastract_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/yeastract_atts.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+
+
+Going to do the same full process for the EGRIN network.
+
+```{r}
+
+egrin_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory EGRIN network.xlsx", sheet = 'EGRIN_TRN', range = 'A1:E2589', col_names = TRUE, trim_ws = TRUE)
+
+egrin_targets <- unique(c(egrin_net$targets, egrin_net$TF))
+
+egrin_atts <- matrix(,nrow = 0, ncol = 2)
+
+for (i in 1:length(egrin_targets)) {
+  
+  curr_targ <- egrin_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$`Differential Expression p-value`[targ_ind[1]])
+    
+    egrin_atts = rbind(egrin_atts,new_row)
+    
+  }
+}
+
+colnames(egrin_atts) <- c("EGRIN_target", "pvalue")
+
+
+```
+
+Now export egrin_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(egrin_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/egrin_atts.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+
+Now repeat the process for the CLR network
+
+```{r}
+
+clr_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory CLR network.xls", sheet = 'CLR_RegulatoryNetwork', range = 'A1:B65536', col_names = TRUE, trim_ws = TRUE)
+
+clr_targets <- unique(c(clr_net$'Target gene', clr_net$TF))
+
+clr_atts <- matrix(,nrow = 0, ncol = 2)
+
+for (i in 1:length(clr_targets)) {
+  
+  curr_targ <- clr_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$`Differential Expression p-value`[targ_ind[1]])
+    
+    clr_atts = rbind(clr_atts,new_row)
+    
+  }
+}
+
+colnames(clr_atts) <- c("CLR_target", "pvalue")
+
+
+```
+
+Now export clr_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(clr_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/clr_atts.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+(005 End)
+
+
+
+(006 Start) - I don't believe this code will end up being used in the final paper - the GAL-CONS-GAL4 vs XYL-/ARA-REG analysis was not used to generate targets for deletion/overexpression.
+
+This set of code chunks is for adding another set of differential expression and pvalues to the vdtregDEG structure, with these new values coming from a differential expression analysis of GAL-CONS-GAL4 vs XYL+ARA-REG. This data is found in the spreadsheet "Z:\SeanS\RNAseq\Mutual Information\GAL-Cons4 vs XR-AR.csv". Fortunately, I will be able to copy and paste much code from above to make this happen.
+
+First step is to bring in the list of DEG from the new file that VDT sent me. I am interested in the gene name (col B), differential expression log2 ratio (col C), and the differential expression p-value (col K)
+
+```{r}
+
+library(readxl)
+
+galconsgal4_xrar_DEG <- read_excel("Z:/SeanS/RNAseq/Mutual Information/GAL-Cons4 vs XR-AR.xlsx", sheet = 'GAL-Cons4 vs XR-AR', range = 'A1:K5884', col_names = TRUE, trim_ws = TRUE)
+
+
+# keep just the rows I am interested in
+galconsgal4_xrar_DEG <- galconsgal4_xrar_DEG[,c(2,3,11)]
+
+# now need to modify the first column to remove ' CDS'
+
+for (i in 1:length(galconsgal4_xrar_DEG$Name)) {
+  
+  charconv2 <- substr(galconsgal4_xrar_DEG$Name[i],1,nchar(galconsgal4_xrar_DEG$Name[i])-4)
+  
+  galconsgal4_xrar_DEG$Name[i] <- charconv2
+  
+}
+
+```
+
+Now I'm going to add the log2DE + pvalues to vdtregDEG under the column headings "gcg4_xrar_log2DE" and "gcg4_xrar_pvalue"
+
+```{r}
+
+# Start by adding columns filled with NA values to vdtregDEG so that I can modify the entries using indices
+
+vdtregDEG$gcg4_xrar_log2DE <- NA
+
+vdtregDEG$gcg4_xrar_pvalue <- NA
+
+# Now time to go through and add the appropriate values where we can find a match. Fortunately, since both files were generated using Geneious, I should be able to simply name match as opposed to having to convert to ORF names first.
+
+for (i in 1:length(galconsgal4_xrar_DEG$Name)) {
+  
+  newname <- galconsgal4_xrar_DEG$Name[i]
+  newlog2DE <- galconsgal4_xrar_DEG$`Differential Expression Log2 Ratio`[i]
+  newpvalue <- galconsgal4_xrar_DEG$`Differential Expression p-value`[i]
+  
+  if (length(grep(newname, vdtregDEG$Name, value = FALSE, fixed = TRUE)) > 0) { 
+    
+    ind <- grep(newname, vdtregDEG$Name, value = FALSE, fixed = TRUE)
+    
+    if (length(ind) > 1) {
+      
+      truechar <- nchar(newname)
+      
+      #print(i)
+
+      for (j in 1:length(ind)) {
+        
+        testchar <- nchar(vdtregDEG$Name[ind[j]])
+        
+        #print(ind)
+        #print(testchar)
+        
+        if (testchar == truechar) {
+          
+          newind <- ind[j]
+          
+          vdtregDEG$gcg4_xrar_log2DE[newind] <- newlog2DE
+          vdtregDEG$gcg4_xrar_pvalue[newind] <- newpvalue
+          
+        }
+      }
+    } else {
+      
+      vdtregDEG$gcg4_xrar_log2DE[ind] <- newlog2DE
+      vdtregDEG$gcg4_xrar_pvalue[ind] <- newpvalue
+      
+    }
+  }
+}
+
+
+```
+
+
+With this done, I can now simply repeat the code chunks that generate attributes files using the new data and slightly changing the names of the files to be output for each network.
+
+
+CODE CHUNKS COPIED FROM FURTHER UP, MODIFIED TO MAKE NEW ATTS FILES FOR DIFFERENT DEG DATA
+Now I am going to modify the YEASTRACT network taken from (2017) Combining inferred regulatory and modify by creating a separate .xls file that contains just the target nodes in the YEASTRACT excel file and their corresponding pvalues from detf_targets_data.
+
+I can then import this file as an attributes file in cytoscape and use it to map colors onto the cytoscape network based on how low the pvalue is. I will also try trimming the network based on pvalues.
+
+```{r}
+
+# first step is to bring in the yeastract network
+
+# yeastract_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory YEASTRACT network.xlsx", sheet = 'YEASTRACT_TRN', range = 'A1:B31076', col_names = TRUE, trim_ws = TRUE)
+
+yeastract_targets <- unique(c(yeastract_net$targets, yeastract_net$TF))
+
+yeastract_atts <- matrix(,nrow = 0, ncol = 3)
+
+for (i in 1:length(yeastract_targets)) {
+  
+  curr_targ <- yeastract_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$gcg4_xrar_log2DE[targ_ind[1]], vdtregDEG$gcg4_xrar_pvalue[targ_ind[1]])
+    
+    yeastract_atts = rbind(yeastract_atts,new_row)
+    
+  }
+}
+
+colnames(yeastract_atts) <- c("YEASTRACT_target", "log2DE", "pvalue")
+
+
+```
+
+Now export yeastract_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(yeastract_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/yeastract_atts_galconsgal4_xrar.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+
+Going to do the same full process for the EGRIN network.
+
+```{r}
+
+# egrin_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory EGRIN network.xlsx", sheet = 'EGRIN_TRN', range = 'A1:E2589', col_names = TRUE, trim_ws = TRUE)
+
+egrin_targets <- unique(c(egrin_net$targets, egrin_net$TF))
+
+egrin_atts <- matrix(,nrow = 0, ncol = 3)
+
+for (i in 1:length(egrin_targets)) {
+  
+  curr_targ <- egrin_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$gcg4_xrar_log2DE[targ_ind[1]], vdtregDEG$gcg4_xrar_pvalue[targ_ind[1]])
+    
+    egrin_atts = rbind(egrin_atts,new_row)
+    
+  }
+}
+
+colnames(egrin_atts) <- c("EGRIN_target", "log2DE", "pvalue")
+
+
+```
+
+Now export egrin_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(egrin_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/egrin_atts_galconsgal4_xrar.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+
+Now repeat the process for the CLR network
+
+```{r}
+
+# clr_net <- read_excel("Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/2017 - combining inferred regulatory CLR network.xls", sheet = 'CLR_RegulatoryNetwork', range = 'A1:B65536', col_names = TRUE, trim_ws = TRUE)
+
+clr_targets <- unique(c(clr_net$'Target gene', clr_net$TF))
+
+clr_atts <- matrix(,nrow = 0, ncol = 3)
+
+for (i in 1:length(clr_targets)) {
+  
+  curr_targ <- clr_targets[i]
+  
+  if (length(grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)) > 0) {
+    
+    targ_ind <- grep(curr_targ,vdtregDEGorfs$ORF, ignore.case = TRUE)
+    
+    new_row <- c(curr_targ, vdtregDEG$gcg4_xrar_log2DE[targ_ind[1]], vdtregDEG$gcg4_xrar_pvalue[targ_ind[1]])
+    
+    clr_atts = rbind(clr_atts,new_row)
+    
+  }
+}
+
+colnames(clr_atts) <- c("CLR_target", "log2DE", "pvalue")
+
+
+```
+
+Now export clr_atts as an excel file so I can import it as an attributes file in cytoscape.
+
+```{r}
+
+write.table(clr_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/clr_atts_galconsgal4_xrar.csv', sep = ",", row.names = FALSE, col.names = TRUE) # append = FALSE, sep = ",", dec = ".",
+
+
+```
+
+
+(006 End)
+
+
+
+
+
+(007 Start)
+
+These code chunks perform GO term enrichment analysis for the top targets selected via network analysis (BetweennessCentrality of significantly differentially expressed genes).
+
+```{r}
+# https://bioconductor.org/packages/release/bioc/vignettes/GOstats/inst/doc/GOstatsHyperG.pdf
+
+# Not actually going to use GOstats for the moment
+
+# library("ALL")
+library("hgu95av2.db")
+library("GO.db")
+library("annotate")
+library("genefilter")
+library("GOstats")
+library("RColorBrewer")
+library("xtable")
+library("Rgraphviz")
+
+```
+
+
+```{r}
+
+# Using ClusterProfiler for GO term enrichment/pathway enrichment
+
+library(clusterProfiler)
+
+# install.packages('enrichplot')
+
+library(enrichplot)
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GOSemSim")
+
+library(GOSemSim)
+
+# library(AnnotationDbi)
+# library(org.Sc.sgd.db)
+# library(dplyr)
+
+```
+
+I need to add two new columns to the data structures egrin_atts, yeastract_atts, and clr_atts:
+
+1. One that contains the GO terms associated with each gene that I can use to better cluster/visualize each network in Cytoscape
+
+2. One that labels the targets identified by our analysis separately from all other genes to enable them to be easily formatted distinctly from all the other genes.
+
+```{r}
+# library(GOSemSim)
+# scGO <- godata('org.Sc.sgd.db', ont="BP", keytype = "ORF")
+
+# Given a list of genes, this function calculates pairwise semantic similarities. Output is a similarity matrix that I need to figure out how to turn into something that can be fed into cytoscape
+
+egrin_semsim = mgeneSim(
+  egrin_nodes,
+  semData = scGO,
+  measure = "Wang",
+  drop = NULL,
+  combine = "BMA",
+  verbose = TRUE
+)
+
+# egrin_semsim_comb = combineScores(egrin_semsim, combine = 'avg') # This is pretty useless
+
+```
+
+This chunk extracts the mappings between ORFs and GO terms, I will try to use this to assign GO terms to each node in my networks to aid in clustering/visualization.
+
+```{r}
+
+entrez2orf <- org.Sc.sgdENTREZID
+
+# Get the ORF IDs that are mapped to an Entrez Gene ID
+entrez2orf <- mappedkeys(x)
+
+# Get the ORF IDs of the EGRIN network and use the mapping to get the GO terms associated with them
+egrin_nodes = egrin_atts[,1]
+
+# Define a function that returns only the unique set of GO IDs when using the mapIDs function to turn ORFs into GO IDs
+uq = function(x) {
+
+  return(unique(x))
+
+}
+
+# This code might be useless
+egrin_ORF2GO = mapIds(org.Sc.sgd.db, keys = egrin_nodes, keytype = "ORF", column = "GO") # ,, multiVals = uq multiVals = first is default
+
+# What I've mapped are GO term IDs which mean nothing, need to convert GO IDs to actual words 
+
+```
+```{r}
+# library(AnnotationDbi)
+# library(org.Sc.sgd.db)
+# library(dplyr)
+
+# This structure contains all the GO terms for each of the EGRIN nodes for all three ontologies
+egrin_ORF2GO = AnnotationDbi::select(org.Sc.sgd.db, keytype = "ORF", keys = egrin_nodes,  column = "GO")
+
+# Restrict egrin_ORF2GO to just unique GO terms with ontology BP
+
+egrin_ORF2GO = filter(egrin_ORF2GO, ONTOLOGY == "BP")
+
+egrin_unique = unique(egrin_ORF2GO$ORF)
+
+go_terms = vector(mode = "character", length = length(egrin_unique))
+
+for (i in 1:length(egrin_unique)) {
+  
+  inds = grep(egrin_unique[i], egrin_ORF2GO$ORF)
+  
+  IDs = unique(egrin_ORF2GO$GO[inds])
+  
+  go_terms[i] = go2term(IDs[1])$Term[1]
+  
+}
+
+# Now create a dataframe with this information
+egrin_nodes_goterms = data.frame(ORF = egrin_unique, GO_term = go_terms, stringsAsFactors = FALSE)
+
+# Now need to update the egrin_atts structure with these GO terms
+
+egrin_atts = cbind(egrin_atts, egrin_nodes_goterms$GO_term)
+
+# Find egrintargets and mark them with 'yes' or else 'no'
+
+egrin_yesno = vector(mode = 'character', length = dim(egrin_atts)[1])
+
+for (i in 1:dim(egrin_atts)[1]) {
+  
+  if (egrin_atts[i,1]  %in%  egrintargets) {
+    
+    egrin_yesno[i] = 'yes'
+    
+  } else {
+      
+    egrin_yesno[i] = 'no'
+    
+    }
+}
+
+egrin_atts = cbind(egrin_atts, egrin_yesno)
+
+# Now just convert ORFs to common gene names and add to egrin_atts
+
+egrin_genename = AnnotationDbi::select(org.Sc.sgd.db, keytype = "ORF", keys = egrin_nodes,  column = "GENENAME")
+egrin_common = AnnotationDbi::select(org.Sc.sgd.db, keytype = "ORF", keys = egrin_nodes,  column = "COMMON")
+
+egrin_atts = cbind(egrin_atts, egrin_genename[,3])
+
+# now write to csv that can be imported into cytoscape
+
+colnames(egrin_atts) <- c("EGRIN_target", "pvalue", "GO_term", "egrin_yesno", "genename")
+
+write.table(egrin_atts, file = 'Z:/SeanS/RNAseq/Mutual Information/Literature networks/2017 - Combining inferred regulatory and reconstructed metabolic networks enhances phenotype prediction in yeast/egrin_atts2.csv', sep = ",", row.names = FALSE, col.names = TRUE)
+
+```
+
+
+
+```{r}
+x = go2ont(egrin_ORF2GO)
+y = go2term(egrin_ORF2GO)
+
+```
+
+
+```{r}
+egrin_atts2 = egrin_atts
+egrin_atts2 = cbind(egrin_atts2, egrin_ORF2GO[1:878])
+colnames(egrin_atts2) = c("EGRIN_target", "pvalue", "GO_term")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+These code chunks perform GO enrichment analysis + visualization on the gene targets identified by our analysis.
+
+First I need to bring in the targets.
+
+```{r}
+
+# targets = read_excel("Z:\\SeanS\\RNAseq\\Mutual Information\\KOtargets3networksbyDEpvalue4VDT.xlsx")
+# targets = targets[1:37,1:4]
+# colnames(targets) = targets[1,1:4]
+# targets = targets[2:37,]
+# targets$`P-value` = as.numeric(targets$`P-value`)
+
+# Now need to assign GO terms to each of these genes but first need to make sure that I can use ORF identifies using the keytypes() function:
+
+# keytypes(org.Sc.sgd.db) # ORF appears in the list, I'm good
+
+# If ORF wasn't in the usable list, I could use the biological translator utility in clusterProfiler to convert between ID types.
+
+# ___________________________
+
+# I did not finish this code
+
+# ftype = "ORF"
+# ttype = "ENTREZID"
+# odb = "org.Sc.sgd.db"
+# 
+# targetsentrez = bitr(targets$ORF, fromType="ORF", toType="ENTREZID", OrgDb="org.Sc.sgd.db")
+# targets$EntrezID = targetsentrez$ENTREZID
+
+# targetsentrez = lapply(targets$ORF, bitr, fromType = "ORF", toType = "ENTREZID", OrgDb = "org.Sc.sgd.db")
+
+# ___________________________
+
+```
+
+Now to find enriched GO terms among the target genes. I can do this for a given gene(s) using the enrichGO function from clusterProfiler
+
+ego = enrichGO(gene          = gene,
+                universe      = names(geneList),
+                OrgDb         = org.Hs.eg.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+        readable      = TRUE)
+
+Or, alternatively, I can assign GO terms of a given level (1-7)
+
+ggo = groupGO(gene     = gene,
+               OrgDb    = org.Sc.sgd.db,
+               ont      = "CC",
+               level    = 3,
+               readable = TRUE)
+               
+
+```{r}
+
+# Starting with EGRIN, going to start by declaring that the gene 'universe' is all yeast genes in the EGRIN network, then may try all significantly differentially expressed genes and compare results.
+
+# dotplot(gse, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+# dotplot(
+#   object,
+#   x = "GeneRatio",
+#   color = "p.adjust",
+#   showCategory = 10,
+#   size = NULL,
+#   split = NULL,
+#   font.size = 12,
+#   title = "",
+#   label_format = 30,
+#   ...
+# )
+
+# egrin_universe = unique(c(egrin_net$TF, egrin_net$targets)) # universe = list of all genes in the EGRIN network
+# egrintargets = targets$ORF[1:11]
+
+# egrin_universe = yeastractTFs # universe = master list of yeast transcription factors
+# egrintargets = egrintargets[egrintargets != "YJL089W"]
+
+# egrin_universe = entrez2orf # universe = all yeast genes = entrez2orf
+# egrintargets = targets$ORF[1:11]
+
+enrichgo_universe = vdtregDEG$ORF[which(vdtregDEG$`Differential Expression p-value` < 0.05)] # universe = all significantly differentially expressed genes in vdtregDEG structure where pvalue < 0.05
+egrintargets = targets$ORF[1:11]
+
+egrin_targets_go = clusterProfiler::enrichGO(
+                gene          = egrintargets,
+                keyType       = "ORF",
+                universe      = egrin_universe,
+                OrgDb         = org.Sc.sgd.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                minGSSize = 10
+                )
+
+e_go_simp = clusterProfiler::simplify(egrin_targets_go, cutoff = 0.7, by = "p.adjust", select_fun = min, measure = "Wang", semData = scGO) #, cutoff = 0.7, by = "p.adjust", select_fun = min, measure = "Wang", semData = NULL)
+
+head(egrin_targets_go, n = 40)
+
+dotplot(egrin_targets_go, 
+        x = "GeneRatio",
+        color = 'p.adjust',
+        showCategory=15,
+        # size = 50,
+        # split = 10,
+        font.size = 10,
+        title = 'EGRIN Targets',
+        # label_format = 30 # defulat is 30, sets text wrap length
+        )
+
+dotplot(e_go_simp, 
+        x = "GeneRatio",
+        color = 'p.adjust',
+        showCategory=8,
+        # size = 50,
+        # split = 10,
+        font.size = 10,
+        title = 'EGRIN Targets',
+        # label_format = 30 # defulat is 30, sets text wrap length
+        )
+
+
+
+```
+
+Now I'm going to repeat the same analysis for both the YEASTRACT + CLR targets. I will keep the same 'universe' of significantly differentially expressed genes for all analyses.
+
+```{r}
+
+yeastracttargets = targets$ORF[12:23]
+
+yeastract_targets_go = clusterProfiler::enrichGO(
+                gene          = yeastracttargets,
+                keyType       = "ORF",
+                universe      = enrichgo_universe,
+                OrgDb         = org.Sc.sgd.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                minGSSize = 10
+                )
+
+yeastract_go_simp = clusterProfiler::simplify(yeastract_targets_go, cutoff = 0.7, by = "p.adjust", select_fun = min, measure = "Wang", semData = scGO)
+
+head(yeastract_targets_go, n = 40)
+
+dotplot(yeastract_targets_go, showCategory=20, x = 'count') # x="count" to have gene counts on x-axis instead of 'gene fraction'
+
+dotplot(yeastract_go_simp, 
+        x = "GeneRatio",
+        color = 'p.adjust',
+        showCategory=15,
+        # size = 50,
+        # split = 10,
+        font.size = 10,
+        title = 'YEASTRACT Targets',
+        # label_format = 30 # defulat is 30, sets text wrap length
+        )
+
+```
+
+
+```{r}
+
+clrtargets = targets$ORF[24:36]
+
+clr_targets_go = clusterProfiler::enrichGO(
+                gene          = clrtargets,
+                keyType       = "ORF",
+                universe      = enrichgo_universe,
+                OrgDb         = org.Sc.sgd.db,
+                ont           = "BP",
+                pAdjustMethod = "BH",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05,
+                minGSSize = 10
+                )
+
+clr_go_simp = clusterProfiler::simplify(clr_targets_go, cutoff = 0.7, by = "p.adjust", select_fun = min, measure = "Wang", semData = scGO)
+
+head(clr_targets_go, n = 40)
+
+dotplot(clr_targets_go, 
+        x = "GeneRatio",
+        color = 'p.adjust',
+        showCategory=15,
+        # size = 50,
+        # split = 10,
+        font.size = 10,
+        title = 'CLR Targets',
+        # label_format = 30 # defulat is 30, sets text wrap length
+        )
+
+dotplot(clr_go_simp, 
+        x = "GeneRatio",
+        color = 'p.adjust',
+        showCategory=15,
+        # size = 50,
+        # split = 10,
+        font.size = 10,
+        title = 'CLR Targets',
+        # label_format = 30 # defulat is 30, sets text wrap length
+        )
+
+```
+
+
+
+
+
+
+
+
+
+
+
+This set of code chunks tests different visualizations of the enrichGO output objects.
+
+```{r}
+
+library(enrichplot)
+
+barplot(egrin_targets_go, showCategory=20)
+barplot(e_go_simp, showCategory=20)
+# mutate(edo, qscore = -log(p.adjust, base=10)) %>% 
+#     barplot(x="qscore")
+
+
+# dotplot(
+#   object,
+#   x = "GeneRatio",
+#   color = "p.adjust",
+#   showCategory = 10,
+#   size = NULL,
+#   split = NULL,
+#   font.size = 12,
+#   title = "",
+#   label_format = 30,
+#   ...
+# )
+
+goplot(egrin_targets_go, max.overlaps = 10)
+goplot(e_go_simp, max.overlaps = 10)
+
+dotplot(egrin_targets_go, showCategory=20) # x="count" to have gene counts on x-axis instead of 'gene fraction'
+dotplot(e_go_simp, showCategory=20)
+
+enrichMap(e_go_simp, vertex.label.cex=1.2, layout=igraph::layout.kamada.kawai)
+
+
+```
+
+```{r}
+
+# This code is me examining what happens when you use gofilter() on the egrin_targets_go results to restrict the terms to different levels
+
+a = gofilter(egrin_targets_go, level = 1)
+b = gofilter(egrin_targets_go, level = 2)
+c = gofilter(egrin_targets_go, level = 3)
+d = gofilter(egrin_targets_go, level = 4)
+e = gofilter(egrin_targets_go, level = 5)
+f = gofilter(egrin_targets_go, level = 6)
+g = gofilter(egrin_targets_go, level = 7)
+h = gofilter(egrin_targets_go, level = 8)
+i = gofilter(egrin_targets_go, level = 9)
+
+```
+
+```{r}
+# head(a, n = 10)
+# dotplot(a, showCategory=20)
+
+head(b, n = 10)
+dotplot(b, showCategory=20)
+
+head(c, n = 10)
+dotplot(c, showCategory=20)
+
+head(d, n = 10)
+dotplot(d, showCategory=20)
+
+head(e, n = 10)
+dotplot(e, showCategory=20)
+
+head(f, n = 10)
+dotplot(f, showCategory=20)
+
+head(g, n = 10)
+dotplot(g, showCategory=20)
+
+head(h, n = 10)
+dotplot(h, showCategory=20)
+
+head(i, n = 10)
+dotplot(i, showCategory=20)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(008 Start) This code is not used and captures my efforts to both generate CLR networks from our RNAseq data as well as export those networks for import/visualization in Cytoscape.
+
+
+With this set of chunks I'm going to try and create a MI network (and export it for visualization) for just the REG files that VDT is using for his differential expression analysis based on the csv/xls file he gave me with expression data.
+
+I'm going to try as many different discretization methods/estimators as possible to see how the MIMs/CLR matrices change.
+
+```{r}
+
+# read in expression data from csv file
+
+vdtregall <- read.csv("Z:/SeanS/RNAseq/VDT rnaseq Expression Levels reg only.csv", header = TRUE, row.names = 1)
+
+```
+
+Available discretization methods - 'none', 'equalfreq', 'equalwidth', 'globalequalwidth'
+Available estimators - 'mi.empirical', 'mi.mm', 'mi.shrink', 'mi.sg', 'pearson', 'spearman', 'kendall'
+
+
+```{r}
+discmethods <- c('equalfreq', 'equalwidth', 'globalequalwidth')
+estimators <- c('mi.empirical', 'mi.mm', 'mi.shrink', 'mi.sg', 'pearson', 'spearman', 'kendall')
+test <- paste('mimreg',discmethods[1],estimators[2], sep = "", collapse = NULL)
+
+```
+
+
+```{r}
+
+ # Testing different discretization methods + available estimators to see if anything works on the REG-only data
+
+#discmethods <- c('none', 'equalfreq', 'equalwidth', 'globalequalwidth')
+discmethods <- c('equalfreq', 'equalwidth', 'globalequalwidth')
+estimators <- c('mi.empirical', 'mi.mm', 'mi.shrink', 'mi.sg', 'pearson', 'spearman', 'kendall')
+
+mim1<- build.mim(vdtregall, estimator = 'mi.empirical', disc = 'equalfreq')
+mim2<- build.mim(vdtregall, estimator = 'mi.empirical', disc = 'equalwidth')
+mim3<- build.mim(vdtregall, estimator = 'mi.empirical', disc = 'globalequalwidth')
+mim4<- build.mim(vdtregall, estimator = 'mi.mm', disc = 'equalfreq')
+mim5<- build.mim(vdtregall, estimator = 'mi.mm', disc = 'equalwidth')
+mim6<- build.mim(vdtregall, estimator = 'mi.mm', disc = 'globalequalwidth')
+mim7<- build.mim(vdtregall, estimator = 'mi.shrink', disc = 'equalfreq')
+mim8<- build.mim(vdtregall, estimator = 'mi.shrink', disc = 'equalwidth')
+mim9<- build.mim(vdtregall, estimator = 'mi.shrink', disc = 'globalequalwidth')
+mim10<- build.mim(vdtregall, estimator = 'mi.sg', disc = 'equalfreq')
+mim11<- build.mim(vdtregall, estimator = 'mi.sg', disc = 'equalwidth')
+mim12<- build.mim(vdtregall, estimator = 'mi.sg', disc = 'globalequalwidth')
+mim13<- build.mim(vdtregall, estimator = 'pearson', disc = 'none')
+mim14<- build.mim(vdtregall, estimator = 'pearson', disc = 'equalfreq')
+mim15<- build.mim(vdtregall, estimator = 'pearson', disc = 'equalwidth')
+mim16<- build.mim(vdtregall, estimator = 'pearson', disc = 'globalequalwidth')
+mim17<- build.mim(vdtregall, estimator = 'spearman', disc = 'none')
+mim18<- build.mim(vdtregall, estimator = 'spearman', disc = 'equalfreq')
+mim19<- build.mim(vdtregall, estimator = 'spearman', disc = 'equalwidth')
+mim20<- build.mim(vdtregall, estimator = 'spearman', disc = 'globalequalwidth')
+mim21<- build.mim(vdtregall, estimator = 'kendall', disc = 'none')
+mim22<- build.mim(vdtregall, estimator = 'kendall', disc = 'equalfreq')
+mim23<- build.mim(vdtregall, estimator = 'kendall', disc = 'equalwidth')
+mim24<- build.mim(vdtregall, estimator = 'kendall', disc = 'globalequalwidth')
+
+
+```
+
+```{r}
+
+clr1 <- clr(mim1)
+clr2 <- clr(mim2)
+clr4 <- clr(mim4)
+clr5 <- clr(mim5)
+clr7 <- clr(mim7)
+clr8 <- clr(mim8)
+clr10 <- clr(mim10)
+clr11 <- clr(mim11)
+clr13 <- clr(mim13)
+clr14 <- clr(mim14)
+clr15 <- clr(mim15)
+clr17 <- clr(mim17)
+clr18 <- clr(mim18)
+clr19 <- clr(mim19)
+clr21 <- clr(mim21)
+clr22 <- clr(mim22)
+clr23 <- clr(mim23)
+
+```
+
+Now I'm going to look at just the data for GAL4 from a few of these matrices to see if they have anything inferred relationships that make sense.
+
+```{r}
+# Starting by extracting a vector of all the row names of the clr matrix so I can find what row GAL4 is in
+
+rows <- row.names(clr2)
+
+# ind = 0
+# for (i in 1:5883) {
+#   
+#   if (rows[i] == "YPL248C") {
+#     ind = i
+#     
+#   }
+# }
+
+ind2 <- grep('GAL4', rows, value = FALSE)
+# ind2 shows GAL4 can be found in row 5435, full name is 'GAL4.CDS' which is why my previous code did not find it.
+
+```
+
+```{r}
+# Now I'm going to try and grab all indices in this row of CLR2 in which the weight of the inferred network interaction is > 0
+
+gal4inf11 <- c()
+
+for (i in 1:5883) {
+  
+  if (!is.na(clr11[5435,i])) {  
+    
+    if (clr11[5435,i] > .01) {
+      
+      gal4inf11[length(gal4inf11)+1] <- rows[i] #c(rows[i],clr2[5435,i])
+    }
+  }
+}
+
+```
+
+The amount of genes that are grabbed changes depending on the threshold that is set. There are about 1976 non-zero network weight (NW) connections but only ~1078 genes have the highest calculated NW of ~2.7.
+
+Now I'm going to search through the vector that I have created to see if it contains genes that should be connected to GAL4, looking for TFs found by VEG transcriptomics data to be differentially expressed in REG strains. Semi-synthetic regulon Supp data #2
+
+```{r}
+
+vegtfs <- c('Aft1','Aro80','Cbf1','Cup9','Eds1','Gcn4','Gsm1','Haa1','Hcm1','Ino4','Mig3','Pdr3','Rdr1','Rds2','Rph1','Rsf2','Sfl1','Stb5','Stp2','Sum1','Sut2','Swi5','Tye7','Vhr1','War1','YKL222C','YNR063W','Yap3','Yox1')
+
+vegtfcount <- length(vegtfs)
+
+vegtfinnet11 <- c()
+
+for (i in 1:vegtfcount) {
+  
+  if (length(grep(vegtfs[i],gal4inf11, value = TRUE, ignore.case = TRUE)) > 0) {
+    
+    #print(vegtfs[i])
+    
+    vegtfinnet11[length(vegtfinnet11)+1] <- vegtfs[i]
+    
+  }
+}
+
+fractfinnet <- length(vegtfinnet11)/vegtfcount
+
+```
+
+Equalwidth data discretization results in networks that capture a higher percentage (~62%) of the TFs identified by VEG as differentially expressed in REG strains compared to equalfreq.
+
+Now I'm going to compare the NW of this subset of TFs in CLRs 2/5/11 by creating a data structure that captures all of the names and the values in each.
+
+```{r}
+
+# using vegtfinnet to search through
+
+tfinfval11 <- c()
+
+for (i in 1:length(vegtfinnet11)) {
+  
+  tfind <- grep(vegtfinnet11[i], rows, value = FALSE, ignore.case = TRUE)
+  
+  print(tfind)
+  
+  
+  tfinfval11[[length(tfinfval11)+1]] <- c(vegtfinnet11[i], clr11[5435,tfind]) # rows[i]
+
+}
+
+
+```
+
+
+
+
+
+
+
+
+This chunk of code is for applying to minet to all of the REG expression levels that VDT sent me that he is looking at for differential gene expression analysis.
+
+```{r}
+
+ # Ash uses minet function calling CLR network algorithm with spearman estimator and the default discretization method
+
+ # function takes ~5 min to run on shared computer
+
+mimvdtreg <- build.mim(vdtregall, estimator = 'mi.empirical', disc = 'none')
+
+
+```
+
+```{r}
+
+# Ash uses minet function calling CLR network algorithm with spearman estimator and the default discretization method
+
+# function takes ~5 min to run on shared computer
+
+vdtregclr3 <- minet(vdtregall, method = 'clr', estimator = 'mi.shrink', disc = 'globalequalwidth')
+
+
+```
+
+```{r}
+library(SemNeT)
+
+# I believe this takes ~several hours on shared computer, need to check
+
+# Convert to Cytoscape format. This function does what I was trying to do from the start - maybe I just didn't let the code run long enough on the shared computer?
+
+cytornaseqall <- convert2cytoscape(allseqfilesclr)
+
+write.csv(cytornaseqall, file = 'G:/SFS/cytornaseqall.csv', row.names = FALSE) # need to change this to a cluster location if repeating
+
+# I was able to successfully import this .csv file into Cytoscape as a network
+
+```
+
+
+
+
+
+
+
+
+With this set of chunks I'm going to try and feed a dataframe containing expression information (not normalized) from all of the RNAseq files that we have so far (VEG + VDT2021). I had built a matrix/dataframe? of expression values (allrnaseqexpvals) using the Transcriptomics analysis pipeline that I feed into the mim function here.
+
+```{r}
+
+# function takes at least 10 mins to run for me on shared computer
+mimall <- build.mim(allrnaseqexpvals, estimator = 'mi.empirical', disc = 'equalwidth') # excluding nbins = sqrt(NROW(vdtreg)) - function will automatically calculate
+
+
+```
+
+```{r}
+
+# function takes < 1 min to run on shared computer
+
+allseqfilesclr <- clr(mimall)
+
+
+```
+
+```{r}
+library(SemNeT)
+
+# I believe this takes ~several hours on shared computer, need to check
+
+# Convert to Cytoscape format. This function does what I was trying to do from the start - maybe I just didn't let the code run long enough on the shared computer?
+
+cytornaseqall <- convert2cytoscape(allseqfilesclr)
+
+write.csv(cytornaseqall, file = 'G:/SFS/cytornaseqall.csv', row.names = FALSE) # need to change this to a cluster location if repeating
+
+# I was able to successfully import this .csv file into Cytoscape as a network
+
+```
+
+
+
+
+
+
+This set of chunks gets into how to export data for visualization, with the SemNeT method being the one that ended up working such that I could visualize the network in Cytoscape
+
+```{r}
+library(SemNeT)
+
+# I believe this takes ~several hours on shared computer, need to check
+
+# Convert to Cytoscape format. This function does what I was trying to do from the start - maybe I just didn't let the code run long enough on the shared computer?
+
+cytornaseqall <- convert2cytoscape(allseqfilesclr)
+
+write.csv(cytornaseqall, file = 'G:/SFS/cytornaseqall.csv', row.names = FALSE) # need to change this to a cluster location if repeating
+
+# I was able to successfully import this .csv file into Cytoscape as a network
+
+```
+
+Rest of these are just different attempts
+
+```{r}
+
+# Practice
+
+# Only takes ~1 min to run on shared computer (cluster)
+
+write.table(allseqfilesclr, file = '/cluster/home/ssulli02/nairlab/ssulli02/allseqfilesexp.csv', append = FALSE, sep = ",", dec = ".",
+            row.names = TRUE, col.names = TRUE)
+
+
+
+```
+
+
+```{r}
+
+# Practice
+
+library(R.matlab)
+
+writeMat(con = '/cluster/home/ssulli02/nairlab/ssulli02/allseqfilesexp.mat', x = allseqfilesclr, fixNames=TRUE, verbose=FALSE)
+
+
+```
+
+
+```{r}
+
+# Practice
+
+#code for writing network files that can be imported into cytoscape
+library(R.matlab)
+
+# writeMat(con="...filepath", x=data)
+
+
+# writeMat(con, ..., fixNames=TRUE, matVersion="5", onWrite=NULL, verbose=FALSE)
+
+# writeMat(con = "C:/Users/sfsul/Documents/Nair Lab/Project Planning/Regulon Engineering/RNA-seq Analysis/Net4test.mat", fixNames=TRUE, onWrite=NULL, verbose=FALSE, x = net4)
+
+writeMat(con = "C:/Users/sfsul/Documents/Net4test.mat", fixNames=FALSE, verbose=FALSE, x = net4)
+
+
+```
+
+
+```{r}
+
+# Practice
+
+net4mod <- matrix(, nrow = 0, ncol = 3)
+
+# net4mod <- rbind(net4mod,c(rownames(net4)[1],colnames(net4)[1],net4[1,1]))
+
+for (i in 1:100) {
+  for (j in 1:100) {
+    # print(i)
+    # print(j)
+    
+
+    net4mod <- rbind(net4mod,c(rownames(net4)[i],colnames(net4)[j],net4[i,j]))
+
+  }
+}
+
+```
+
+
+```{r}
+
+# Practice
+
+write.csv(net4mod, file = '/cluster/tufts/nairlab/ssulli02/net4mod.csv', append = FALSE, quote = FALSE, row.names = FALSE)
+
+
+# '/cluster/home/ssulli02/net4mod.csv'
+# "C:/Users/sfsul/Documents/Net4mod.csv"
+
+```
+
+
+Ash Sunkavalli code
+
+```{r}
+# Code from Ash Sunkavalli for performing minet/visualizing netowrk
+
+wt_mut_m<-minet(mper_wt_data, method="clr", estimator="spearman")
+wt_mut_clr<-clr(wt_mut_m)
+#Get z score threshold
+
+x<-wt_mut_clr
+edges <- c(6000, 8000, 9000, 10000, 11000) # (5000, 6000, ) need to double to account for fact that each score appears twice
+x_list <- unlist(x)
+x_sort <- sort(x_list, decreasing = TRUE)
+edge_1 <- x_sort[edges[1]]
+edge_2 <- x_sort[edges[2]]
+edge_3 <- x_sort[edges[3]]
+edge_4 <- x_sort[edges[4]]
+edge_6 <- x_sort[edges[6]]
+
+included_edges <- c(edge_1, edge_2, edge_3, edge_4, edge_6)
+outputData <- cbind(Edge_Cutoff=included_edges, edges)
+View(outputData)
+
+#Pick one threshold and generate .sif and . graphml files
+
+library(igraph)
+cutoffs <- c(6.5)
+adjMatWht <- wt_mut_clr
+for(n in (1:length(cutoffs))) {
+  adjMat <- adjMatWht
+  minZVal <- cutoffs[n]
+  print(minZVal)
+  #############_CHECK THIS_#############
+  diag(adjMat) <- 0
+  adjMat <- abs(adjMat)
+  #############_CHECK THIS_#############
+  adjMat[adjMat < minZVal] <- 0
+  adjMat[adjMat >= minZVal] <- 1
+  adjMat <- as.matrix(adjMat)
+  #-------ALERT ALERT ALERT ---- Take note of the mode argument in the line below-----------
+  modePicked <- "undirected"
+  g <- graph.adjacency(adjMat, mode= modePicked)
+  print(modePicked)
+  #-----------------------------------------------------------------------------------------
+  g <- delete.vertices(g, which(degree(g) == 0))
+  outputData <- get.edgelist(g)
+  outputData <- cbind(outputData[, 1], "C", outputData[, 2])
+  outputFilePath <- sprintf("/Users/asunka01/Documents/GC/Data/2021/01/Network/both_CLR_Network_2021-03-16_%s.sif", minZVal)
+  write.table(outputData, file=outputFilePath, quote=FALSE, sep=" ", row.names=FALSE, col.names=FALSE)
+  print(nrow(outputData))
+  outputFilePath <- sprintf("/Users/asunka01/Documents/GC/Data/2021/01/Network/both_CLR_Network_2021-03-16_%s.graphml", minZVal)
+  write.graph(g, outputFilePath, format="graphml")
+  print("Done with CreateNetwork")
+}
+```
+
+(008 End)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Basically Trash Code
+
+```{r}
+
+
+# data(syn.data)
+
+```
+
+
+```{r}
+
+mimtest1 <- build.mim(syn.data, estimator = 'spearman', disc = 'none')
+mimtest2 <- build.mim(syn.data, estimator = 'spearman', disc = 'equalwidth')
+# mimtest3 <- build.mim(syn.data, estimator = 'mi.empirical', disc = 'none') #doesnt work
+mimtest4 <- build.mim(syn.data, estimator = 'mi.empirical', disc = 'equalwidth')
+mimtest5 <- build.mim(syn.data, estimator = 'mi.empirical', disc = 'equalfreq')
+#unsurprisingly, different algorithms leads to different MIMs but they are overall similar
+
+```
+
+```{r}
+nettest1 <- clr(mimtest1)
+nettest2 <- clr(mimtest2)
+nettest4 <- clr(mimtest4)
+nettest5 <- clr(mimtest5)
+#unsurprisingly, same algorithm on different MIMs leads to different networks but they are overall similar
+```
+
+
+```{r}
+
+# read in expression data from csv file
+# vdtreg <- read.csv("C:/Users/sfsul/Documents/Nair Lab/Project Planning/Regulon Engineering/RNA-seq Analysis/VDT rnaseq Expression Levels reg only.csv", header = TRUE, row.names = 1)
+
+vdtall <- read.csv("C:/Users/sfsul/Documents/Nair Lab/Project Planning/Regulon Engineering/RNA-seq Analysis/VDT rnaseq Expression Levels edit.csv", header = TRUE, row.names = 1)
+
+```
+
+
+```{r}
+
+# mimreg1 <- build.mim(vdtreg, estimator = 'spearman', disc = 'none') #standard deviation is 0 - seems bad
+
+mimreg2 <- build.mim(vdtall, estimator = 'spearman', disc = 'none') #standard deviation is 0 - seems bad
+
+
+
+
+# mimreg2 <- build.mim(vdtreg, estimator = 'spearman', disc = 'equalwidth', nbins = sqrt(NROW(vdtreg)))
+# mimreg3 <- build.mim(vdtreg, estimator = 'mi.empirical', disc = 'none', nbins = sqrt(NROW(vdtreg)))
+# mimreg4 <- build.mim(vdtreg, estimator = 'mi.empirical', disc = 'equalwidth', nbins = sqrt(NROW(vdtreg))) # doesnt work
+
+# mimregtest <- build.mim(vdtreg, estimator = 'spearman', disc = 'none', nbins = sqrt(NROW(vdtreg)))
+
+# mutual information matrix seems to be very different based on the discretization method used
+
+
+#### BAD CODE
+# mimreg3 <- build.mim(vdtreg, estimator = 'mi.shrink', disc = 'none', nbins = sqrt(NROW(vdtreg)))
+# mimreg4 <- build.mim(vdtreg, estimator = 'mi.shrink', disc = 'equalwidth', nbins = sqrt(NROW(vdtreg)))
+
+
+```
+
+
+```{r}
+
+# net1 <- mrnet(mimreg1)
+# net2 <- clr(mimreg1)
+# net3 <- aracne(mimreg1)
+
+# net4 <- mrnet(mimreg2)
+# net5 <- clr(mimreg2)
+# net6 <- aracne(mimreg2)
+
+
+# for (i in 1:ncol(net1)) {
+#   for (j in 1:nrow(net1)) {
+#     if (is.na(net1[i][j]) == FALSE)  {
+#       # print('TRUE')
+#       # nancount <- nancount +1
+#       othercount <- othercount + 1
+#     } 
+#     # if (net1[i][j] == 0) {
+#     #     zerocount <- zerocount + 1
+#     # }
+#   }
+# }
+
+
+# nonzero <- vector(mode = "list", length = desired_length)
+# mylist <- list()
+# 
+# for (i in 1:5883) {
+#   if (is.na(net4[4093][i]) == FALSE) {
+#     if (net4[4093][i] > 0) {
+#       # mylist <- c(mylist,i)
+#       print(i)
+#     }
+#   } 
+# }
+
+
+gal80 <- net4[4093,]
+highmi <- max(gal80)
+which.max( net4[4093,] )
+
+```
+
+```{r}
+# Using org.Sc.sgd.db library
+
+# library(org.Sc.sgd.db) # remember that if Clusterprofiler is also loaded the select() function will be from that package unless explicitly called otherwise
+
+# test2 <- select(org.Sc.sgd.db, keys = c("AAD10","AAD15","ALD3"), keytype = "GENENAME", columns = c("ENTREZID", "GENENAME"))
+# test2 <- get(test, org.Sc.sgdALIAS2ORF)
+# # get Entrez Gene ID
+# get(ID, org.Sc.sgdENTREZID)
+# 
+# # get ensembl Gene ID
+# get(ID, org.Sc.sgdENSEMBL)
+# 
+# # get GO terms
+# get(ID, org.Sc.sgdGO)
+# gene2orf = org.Sc.sgdCOMMON2ORF
+# mapped_gene <- mappedkeys(gene2orf)
+# common2orf <- as.list(org.Sc.sgdCOMMON2ORF)
+# scdbcols <- columns(org.Sc.sgd.db)
+
+
+test <- yeastractTFs
+test2 <- select(org.Sc.sgd.db, keys = test, keytype = "GENENAME", columns = "ORF")
+
+# these two produce the same output:
+# test3 <- test2[,1:2]
+# test4 <- data.frame(GENENAME = test2$GENENAME, ORF = test2$ORF)
+# but i dont think its necessary to get rid of the SGD ID column - might be useful later 
+
+                
+```
